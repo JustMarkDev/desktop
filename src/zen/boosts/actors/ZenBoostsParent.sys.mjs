@@ -164,12 +164,11 @@ export class ZenBoostsParent extends JSWindowActorParent {
           break;
         }
 
-        const exists = lazy.gZenBoostsManager.registeredBoostForDomain(domain);
-        if (!exists) {
+        const boost = lazy.gZenBoostsManager.resolveBoost(domain);
+        if (!boost) {
           break;
         }
 
-        const boost = lazy.gZenBoostsManager.loadActiveBoostFromStore(domain);
         let workspaceGradient = [];
         if (boost.boostEntry.boostData.autoTheme) {
           const currentWorkspace =

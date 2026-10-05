@@ -266,11 +266,36 @@ export class nsZenSiteDataPanel {
 
     /* Boosts panel */
 
-    const boosts = lazy.gZenBoostsManager.loadBoostsFromStore(domain);
+    const manager = lazy.gZenBoostsManager;
+    const boosts = manager.loadBoostsFromStore(domain);
     let validBoostCount = 0;
 
+    // The global boost is listed first, its toggle only affects this site
+    const hasGlobal = !!manager.resolveBoost(manager.GLOBAL_DOMAIN);
+    const globalDisabled = manager.isGlobalDisabledFor(domain);
+    if (hasGlobal) {
+      validBoostCount++;
+      const item = this.#createBoostPanelItem(
+        "boost-brush",
+        "",
+        "zen-site-data-toggle-global-boost",
+        null,
+        !globalDisabled
+      );
+      item.setAttribute("state", globalDisabled ? "disabled" : "enabled");
+      if (!globalDisabled && manager.resolveBoost(domain)?.source === "site") {
+        item
+          .querySelector(".zen-permission-popup-boost-state-label")
+          .setAttribute("data-l10n-id", "zen-site-data-global-boost-replaced");
+      }
+      item
+        .querySelector(".permission-popup-boost-label")
+        .setAttribute("data-l10n-id", "zen-site-data-global-boost");
+      list.appendChild(item);
+    }
+
     if (boosts) {
-      const activeBoostId = lazy.gZenBoostsManager.getActiveBoostId(domain);
+      const activeBoostId = manager.getActiveBoostId(domain);
       boosts.forEach(boost => {
         const boostData = boost.boostEntry.boostData;
         if (!boostData.changeWasMade) {
@@ -279,15 +304,19 @@ export class nsZenSiteDataPanel {
         validBoostCount++;
 
         const enabled = boost.id === activeBoostId;
-        list.appendChild(
-          this.#createBoostPanelItem(
-            "boost-brush",
-            boostData.boostName,
-            "zen-site-data-toggle-boost",
-            boost,
-            enabled
-          )
+        const item = this.#createBoostPanelItem(
+          "boost-brush",
+          boostData.boostName,
+          "zen-site-data-toggle-boost",
+          boost,
+          enabled
         );
+        if (enabled && hasGlobal && !globalDisabled) {
+          item
+            .querySelector(".zen-permission-popup-boost-state-label")
+            .setAttribute("data-l10n-id", "zen-site-data-boost-customised");
+        }
+        list.appendChild(item);
       });
     }
     section.hidden = validBoostCount === 0;
@@ -341,12 +370,12 @@ export class nsZenSiteDataPanel {
 
     const stateLabel = this.document.createXULElement("label");
     stateLabel.setAttribute("class", "zen-permission-popup-boost-state-label");
-    const stateLabelId = enabled
-      ? "zen-site-data-protections-enabled"
-      : "zen-site-data-protections-disabled";
-    this.document.l10n.formatMessages([stateLabelId]).then(([labelContent]) => {
-      stateLabel.textContent = labelContent.value;
-    });
+    stateLabel.setAttribute(
+      "data-l10n-id",
+      enabled
+        ? "zen-site-data-protections-enabled"
+        : "zen-site-data-protections-disabled"
+    );
     labelContainer.appendChild(stateLabel);
 
     container.appendChild(img);
@@ -879,6 +908,14 @@ export class nsZenSiteDataPanel {
         const boostId = target.getAttribute("data-boost-id");
 
         lazy.gZenBoostsManager.toggleBoostActiveForDomain(domain, boostId);
+        this.#updateSiteBoost();
+        break;
+      }
+      case "zen-site-data-toggle-global-boost": {
+        lazy.gZenBoostsManager.setGlobalDisabledForDomain(
+          domain,
+          !lazy.gZenBoostsManager.isGlobalDisabledFor(domain)
+        );
         this.#updateSiteBoost();
         break;
       }

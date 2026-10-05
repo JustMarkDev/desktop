@@ -45,6 +45,7 @@ export class nsZenBoostEditor {
     this.lastDotSetPos = { x: 0, y: 0 };
     this.currentBoostData = null;
     this.boostInfo = null;
+    this.isGlobal = domain === gZenBoostsManager.GLOBAL_DOMAIN;
 
     this.killOtherEditorInstances();
 
@@ -86,6 +87,9 @@ export class nsZenBoostEditor {
     });
 
     this.doc.getElementById("zenBoostWindow").setAttribute("editor", "boost");
+    // Zaps are site specific and the global boost never changes zoom
+    this.doc.getElementById("zen-boost-zap").hidden = this.isGlobal;
+    this.doc.getElementById("zen-boost-size").hidden = this.isGlobal;
     this.doc.getElementById("zen-boost-editor-root").style.display = "flex";
     this.doc.getElementById("zen-boost-code-editor-root").style.display =
       "none";

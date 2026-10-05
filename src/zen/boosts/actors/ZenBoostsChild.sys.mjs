@@ -20,6 +20,9 @@ export class ZenBoostsChild extends JSWindowActorChild {
 
   #overlay = null;
 
+  // Whether the applied boost is the global one with invert on
+  #globalInvert = false;
+
   static STATES = {
     NONE: "none",
     ZAP: "zap",
@@ -71,9 +74,60 @@ export class ZenBoostsChild extends JSWindowActorChild {
   static PREVENTABLE_SET = new Set(ZenBoostsChild.PREVENTABLE_EVENTS);
 
   handleEvent(event) {
-    if (event.type === "DOMDocElementInserted") {
-      this.#applyBoostForPageIfAvailable();
+    switch (event.type) {
+      case "DOMDocElementInserted":
+        this.#applyBoostForPageIfAvailable();
+        break;
+      case "DOMContentLoaded":
+      case "pageshow":
+        this.#updateGlobalInvert();
+        break;
     }
+  }
+
+  /**
+   * Whether the page is already dark, judged by its own background (the
+   * backend inverts at paint time, so computed styles are the original ones).
+   *
+   * @returns {boolean} True if the page background is dark
+   */
+  #isPageDark() {
+    const win = this.contentWindow;
+    const doc = this.document;
+    for (const el of [doc.body, doc.documentElement]) {
+      if (!el) {
+        continue;
+      }
+      // Handles any CSS color syntax, e.g. oklch() from Tailwind
+      const { r, g, b, a } = InspectorUtils.colorToRGBA(
+        win.getComputedStyle(el).backgroundColor
+      );
+      if (a > 0.5) {
+        return (r * 54 + g * 183 + b * 19) >> 8 < 128;
+      }
+    }
+    // A transparent page shows the canvas, which follows the color scheme
+    const scheme = win.getComputedStyle(doc.documentElement).colorScheme;
+    return (
+      scheme.includes("dark") &&
+      (!scheme.includes("light") ||
+        win.matchMedia("(prefers-color-scheme: dark)").matches)
+    );
+  }
+
+  /**
+   * The global boost doesn't invert pages that are already dark, which
+   * would turn them light. Re-checked as the page's styles load.
+   */
+  #updateGlobalInvert() {
+    if (!this.#globalInvert || this.browsingContext?.parent !== null) {
+      return;
+    }
+    this.#setSyncedField(
+      this.browsingContext,
+      "isZenBoostsInverted",
+      !this.#isPageDark()
+    );
   }
 
   didDestroy() {
@@ -374,14 +428,19 @@ export class ZenBoostsChild extends JSWindowActorChild {
         this.#loadStyleSheet(boost.styleSheet);
       }
 
-      this.sendAsyncMessage("ZenBoost:UpdateBoostSize", {
-        sizeOverride: boostData.sizeOverride,
-      });
+      // The global boost never changes zoom, it would fight the user's own
+      if (boost.source !== "global") {
+        this.sendAsyncMessage("ZenBoost:UpdateBoostSize", {
+          sizeOverride: boostData.sizeOverride,
+        });
+      }
 
+      // A site boost always inverts, it was set up for that site
+      this.#globalInvert = boost.source === "global" && !!boostData.smartInvert;
       this.#setSyncedField(
         browsingContext,
         "isZenBoostsInverted",
-        !!boostData.smartInvert
+        !!boostData.smartInvert && !(this.#globalInvert && this.#isPageDark())
       );
       if (boostData.enableColorBoost) {
         let primaryColor;
@@ -429,6 +488,7 @@ export class ZenBoostsChild extends JSWindowActorChild {
         return;
       }
     } else {
+      this.#globalInvert = false;
       this.#setSyncedField(browsingContext, "isZenBoostsInverted", false);
     }
     this.#setSyncedField(browsingContext, "zenBoostsData", 0);

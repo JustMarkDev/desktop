@@ -15,6 +15,29 @@ const lazy = XPCOMUtils.declareLazy({
 
 const AGENT_SHEET = Ci.nsIStyleSheetService.AGENT_SHEET;
 
+// Text that must keep the site's own font and case: code and math (with everything
+// inside them), SVG text, and icon fonts. Icon fonts can't be detected from
+// CSS, so this goes by the common class conventions (Material, Font Awesome,
+// Bootstrap Icons, "*icon*") plus empty elements, whose only text comes from
+// ::before/::after icon glyphs.
+// ponytail: class heuristics, icon fonts named otherwise still get replaced.
+const KEEP_FONT_CONTAINERS =
+  "pre, code, kbd, samp, tt, math, svg, .monaco-editor, .cm-editor, .CodeMirror, .ace_editor";
+const KEEP_FORMAT_SELECTOR = `
+  ${KEEP_FONT_CONTAINERS},
+  :is(${KEEP_FONT_CONTAINERS}) *,
+  :empty,
+  mat-icon,
+  gf-load-icon-font,
+  [class*="icon" i],
+  [class*="symbol" i],
+  [class~="fa"],
+  [class^="fa-"],
+  [class*=" fa-"],
+  [class^="bi-"],
+  [class*=" bi-"],
+  [data-icon]`;
+
 export class nsZenBoostStyles {
   #stylesCache = new Map();
 
@@ -59,9 +82,10 @@ export class nsZenBoostStyles {
   #generateStyleString(boostData) {
     let style = ``;
 
+    // Quoted, so names with digits or symbols stay valid CSS
     const fontFamily =
       boostData.fontFamily != ""
-        ? `font-family: ${boostData.fontFamily} !important;`
+        ? `font-family: "${boostData.fontFamily.replace(/["\\]/g, "\\$&")}" !important;`
         : ``;
     const fontCase =
       boostData.textCaseOverride != "none"
@@ -82,10 +106,15 @@ export class nsZenBoostStyles {
 
     if (fontCase != "" || fontFamily != "") {
       style += `/* Text Format */\n`;
-      style += `body *:not(.google-symbols, gf-load-icon-font, mat-icon, .google-material-icons) {\n`;
+      style += `*:not(${KEEP_FORMAT_SELECTOR}) {\n`;
       style += `${fontFamily}\n`;
       style += `${fontCase}\n`;
       style += `}\n`;
+      // text-transform is inherited, so code and icon ligatures would pick
+      // up the case override from their parents
+      if (fontCase != "") {
+        style += `:is(${KEEP_FORMAT_SELECTOR}) { text-transform: none !important; }\n`;
+      }
     }
 
     if ((boostData.customCSS || "").trim() != "") {

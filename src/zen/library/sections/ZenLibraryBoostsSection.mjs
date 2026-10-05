@@ -67,6 +67,9 @@ export class ZenLibraryBoostsSection extends ZenLibrarySearchSection {
     const boosts = [];
     const query = this.searchQuery.toLowerCase();
     for (const [domain, entry] of lazy.gZenBoostsManager.registeredDomains) {
+      if (domain === lazy.gZenBoostsManager.GLOBAL_DOMAIN) {
+        continue;
+      }
       for (const [id, boostEntry] of entry.boostEntries) {
         const { boostData } = boostEntry;
         if (!boostData.changeWasMade) {
@@ -92,6 +95,32 @@ export class ZenLibraryBoostsSection extends ZenLibrarySearchSection {
     );
   }
 
+  /**
+   * @returns {object | null} The global boost shaped like the rows of #boosts()
+   */
+  #globalBoost() {
+    const domain = lazy.gZenBoostsManager.GLOBAL_DOMAIN;
+    const entry = lazy.gZenBoostsManager.registeredDomains.get(domain);
+    for (const [id, boostEntry] of entry?.boostEntries ?? []) {
+      if (boostEntry.boostData.changeWasMade) {
+        return {
+          id,
+          domain,
+          name: boostEntry.boostData.boostName,
+          enabled: entry.activeBoostId === id,
+        };
+      }
+    }
+    return null;
+  }
+
+  #createGlobal(row) {
+    const { id, domain } = lazy.gZenBoostsManager.createNewBoost(
+      lazy.gZenBoostsManager.GLOBAL_DOMAIN
+    );
+    this.#edit({ id, domain }, row);
+  }
+
   // Actions
 
   #toggle(boost) {
@@ -110,7 +139,25 @@ export class ZenLibraryBoostsSection extends ZenLibrarySearchSection {
     if (this.#glanceBrowser) {
       return;
     }
-    const url = `https://${boost.domain}/`;
+    const isGlobal = boost.domain === lazy.gZenBoostsManager.GLOBAL_DOMAIN;
+    // The global boost previews live on the current tab, unless that site
+    // has its own boost or disabled the global one, hiding the preview
+    const currentURI = window.gBrowser.currentURI;
+    if (
+      isGlobal &&
+      lazy.gZenBoostsManager.canBoostSite(currentURI) &&
+      lazy.gZenBoostsManager.resolveBoost(currentURI.host)?.source !== "site" &&
+      !lazy.gZenBoostsManager.isGlobalDisabledFor(currentURI.host)
+    ) {
+      this.#editor = lazy.gZenBoostsManager.openBoostWindow(
+        window,
+        lazy.gZenBoostsManager.loadBoostFromStore(boost.domain, boost.id),
+        window.gBrowser.currentURI
+      );
+      return;
+    }
+    // Without a boostable current tab the global boost previews in a glance
+    const url = isGlobal ? "https://example.com/" : `https://${boost.domain}/`;
     const uri = Services.io.newURI(url);
     if (!lazy.gZenBoostsManager.canBoostSite(uri)) {
       return;
@@ -228,6 +275,7 @@ export class ZenLibraryBoostsSection extends ZenLibrarySearchSection {
   // Rendering
 
   #renderBoost(boost) {
+    const isGlobal = boost.domain === lazy.gZenBoostsManager.GLOBAL_DOMAIN;
     return html`
       <div
         class="zen-library-row zen-library-boost-row"
@@ -239,11 +287,34 @@ export class ZenLibraryBoostsSection extends ZenLibrarySearchSection {
         }}
       >
         <div class="zen-library-boost-icon zen-squircle-before">
-          <img src="page-icon:https://${boost.domain}/" alt="" />
+          <img
+            src=${
+              isGlobal
+                ? "chrome://browser/skin/zen-icons/boost.svg"
+                : `page-icon:https://${boost.domain}/`
+            }
+            alt=""
+          />
         </div>
         <div class="zen-library-row-text">
-          <span class="zen-library-row-title">${boost.name}</span>
-          <span class="zen-library-row-subtitle">${boost.domain}</span>
+          ${
+            isGlobal
+              ? html`<span
+                  class="zen-library-row-title"
+                  data-l10n-id="library-boosts-global-title"
+                ></span>`
+              : html`<span class="zen-library-row-title">${boost.name}</span>`
+          }
+          ${
+            isGlobal
+              ? html`<span
+                  class="zen-library-row-subtitle"
+                  data-l10n-id="library-boosts-global-subtitle"
+                ></span>`
+              : html`<span class="zen-library-row-subtitle"
+                  >${boost.domain}</span
+                >`
+          }
         </div>
         <div class="zen-library-row-actions">
           <moz-toggle
@@ -257,9 +328,38 @@ export class ZenLibraryBoostsSection extends ZenLibrarySearchSection {
     `;
   }
 
+  #renderGlobal() {
+    const global = this.#globalBoost();
+    if (global) {
+      return this.#renderBoost(global);
+    }
+    return html`
+      <div
+        class="zen-library-row zen-library-boost-row"
+        @click=${event => this.#createGlobal(event.currentTarget)}
+      >
+        <div class="zen-library-boost-icon zen-squircle-before">
+          <img src="chrome://browser/skin/zen-icons/boost.svg" alt="" />
+        </div>
+        <div class="zen-library-row-text">
+          <span
+            class="zen-library-row-title"
+            data-l10n-id="library-boosts-global-create"
+          ></span>
+          <span
+            class="zen-library-row-subtitle"
+            data-l10n-id="library-boosts-global-create-subtitle"
+          ></span>
+        </div>
+      </div>
+    `;
+  }
+
   renderItems() {
     const boosts = this.#boosts();
-    if (!boosts.length) {
+    // The global boost is hidden while searching
+    const showGlobal = !this.searchQuery;
+    if (!boosts.length && !showGlobal) {
       return html`
         <div
           class="zen-library-empty"
@@ -269,6 +369,7 @@ export class ZenLibraryBoostsSection extends ZenLibrarySearchSection {
     }
     return html`
       <div class="zen-library-group">
+        ${showGlobal ? this.#renderGlobal() : ""}
         ${repeat(boosts, boostKey, boost => this.#renderBoost(boost))}
       </div>
     `;

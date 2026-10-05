@@ -112,3 +112,8 @@ library-boosts-toggle =
     .aria-label = Enable boost
 library-boosts-menu-edit =
     .label = Edit Boost
+
+library-boosts-global-title = Global boost
+library-boosts-global-subtitle = Applies to all websites
+library-boosts-global-create = Create global boost
+library-boosts-global-create-subtitle = One boost for every website

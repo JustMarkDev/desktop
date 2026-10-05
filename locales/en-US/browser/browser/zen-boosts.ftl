@@ -57,3 +57,6 @@ zen-site-data-boosts = Boosts
 zen-site-data-create-boost =
     .tooltiptext = Create new boost
 zen-boost-rename-boost-prompt = Rename Boost?
+zen-site-data-global-boost = Global boost
+zen-site-data-boost-customised = Customised for this site
+zen-site-data-global-boost-replaced = Replaced by this site's boost

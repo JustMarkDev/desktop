@@ -6,7 +6,10 @@ import { JSONFile } from "resource://gre/modules/JSONFile.sys.mjs";
 import { nsZenBoostStyles } from "resource:///modules/zen/boosts/ZenBoostStyles.sys.mjs";
 
 class nsZenBoostsManager {
-  registeredDomains = new Map(); // <domain, { boosts: <id, boostEntry>, activeBoostID: null }>
+  // Reserved domain key holding the global boost. "*" can never be a real host.
+  GLOBAL_DOMAIN = "*";
+
+  registeredDomains = new Map(); // <domain, { boostEntries: <id, boostEntry>, activeBoostId, globalDisabled }>
   #stylesManager = new nsZenBoostStyles();
 
   #saveFilename = "zen-boosts.jsonlz4";
@@ -24,6 +27,8 @@ class nsZenBoostsManager {
     return {
       boostEntries: new Map(), // <id, boostEntry>
       activeBoostId: null,
+      // When true the global boost is not applied on this domain
+      globalDisabled: false,
     };
   }
 
@@ -95,7 +100,7 @@ class nsZenBoostsManager {
         domainEntry.activeBoostId = null;
       }
 
-      if (domainEntry.boostEntries.size === 0) {
+      if (domainEntry.boostEntries.size === 0 && !domainEntry.globalDisabled) {
         this.#deleteDomainEntry(domain);
       }
     }
@@ -161,6 +166,20 @@ class nsZenBoostsManager {
 
     const id = crypto.randomUUID();
     const boostEntry = this.getEmptyBoostEntry(domain);
+
+    // A site boost replaces the global one, so start from a copy of it.
+    // changeWasMade stays false: an abandoned editor still deletes it.
+    const global =
+      domain !== this.GLOBAL_DOMAIN && this.#getActiveBoost(this.GLOBAL_DOMAIN);
+    if (global) {
+      boostEntry.boostData = {
+        ...structuredClone(global.boostEntry.boostData),
+        boostName: boostEntry.boostData.boostName,
+        zapSelectors: [],
+        sizeOverride: 1,
+        changeWasMade: false,
+      };
+    }
 
     const domainEntry = this.#getOrCreateDomainEntry(domain);
     domainEntry.boostEntries.set(id, boostEntry);
@@ -246,6 +265,71 @@ class nsZenBoostsManager {
     }
 
     return null;
+  }
+
+  /**
+   * Side-effect free lookup of the active, customised boost of a domain.
+   *
+   * @param {string} domain - The domain of the boost
+   * @returns {object | null} { id, domain, boostEntry } or null
+   */
+  #getActiveBoost(domain) {
+    const domainEntry = this.#getDomainEntry(domain);
+    const boostEntry = domainEntry?.boostEntries.get(domainEntry.activeBoostId);
+    if (!boostEntry?.boostData.changeWasMade) {
+      return null;
+    }
+    return { id: domainEntry.activeBoostId, domain, boostEntry };
+  }
+
+  /**
+   * Resolves which boost applies to a page: the active site boost if there
+   * is one, else the global boost unless the site disabled it.
+   *
+   * @param {string} domain - The domain of the page
+   * @returns {object | null} { id, domain, boostEntry, source } or null.
+   *   `domain` is the owner of the boost ("*" for the global boost).
+   */
+  resolveBoost(domain) {
+    const site = this.#getActiveBoost(domain);
+    if (site) {
+      return { ...site, source: "site" };
+    }
+    if (domain !== this.GLOBAL_DOMAIN && !this.isGlobalDisabledFor(domain)) {
+      const global = this.#getActiveBoost(this.GLOBAL_DOMAIN);
+      if (global) {
+        return { ...global, source: "global" };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * @param {string} domain - The domain to check
+   * @returns {boolean} Whether the global boost is disabled on this domain
+   */
+  isGlobalDisabledFor(domain) {
+    return this.#getDomainEntry(domain)?.globalDisabled ?? false;
+  }
+
+  /**
+   * Enables or disables the global boost on a single domain.
+   *
+   * @param {string} domain - The target domain
+   * @param {boolean} disabled - Whether the global boost is disabled there
+   */
+  setGlobalDisabledForDomain(domain, disabled) {
+    if (!domain || domain === this.GLOBAL_DOMAIN) {
+      return;
+    }
+    const domainEntry = this.#getOrCreateDomainEntry(domain);
+    domainEntry.globalDisabled = disabled;
+    if (domainEntry.boostEntries.size === 0 && !disabled) {
+      this.#deleteDomainEntry(domain);
+    }
+
+    this.#writeToDisk(this.registeredDomains);
+    this.notify(true);
   }
 
   /**
@@ -475,6 +559,7 @@ class nsZenBoostsManager {
 
       map.set(domain, {
         activeBoostId: entry.activeBoostId ?? null,
+        globalDisabled: entry.globalDisabled ?? false,
         boostEntries: boostsMap,
       });
     }
@@ -524,6 +609,7 @@ class nsZenBoostsManager {
       }
       obj[domain] = {
         activeBoostId: entry.activeBoostId ?? null,
+        globalDisabled: entry.globalDisabled ?? false,
         boostEntries: boostsObj,
       };
     }
@@ -554,20 +640,14 @@ class nsZenBoostsManager {
   }
 
   /**
-   * Checks if any boost is registered and active for the specified domain.
+   * Checks if the domain has its own active boost. The global boost is left
+   * out so the animated urlbar indicator doesn't run on every page.
    *
-   * @param {string} domain - The domain to check for any registered and active boost.
-   * @returns {boolean} True if a boost exists for the domain and is active, false otherwise.
+   * @param {string} domain - The domain to check for an active site boost.
+   * @returns {boolean} True if the domain has an active site boost.
    */
   registeredBoostForDomain(domain) {
-    const domainEntry = this.#getDomainEntry(domain);
-
-    if (domainEntry) {
-      const boost = this.loadActiveBoostFromStore(domain);
-      return boost?.boostEntry.boostData.changeWasMade ?? false;
-    }
-
-    return false;
+    return this.resolveBoost(domain)?.source === "site";
   }
 
   /**
@@ -591,13 +671,14 @@ class nsZenBoostsManager {
    * @returns {nsIStyleSheet} The style sheet corresponding to the boost data.
    */
   getStyleSheetForBoost(domain) {
-    const boost = this.loadActiveBoostFromStore(domain);
+    const boost = this.resolveBoost(domain);
     if (!boost) {
       return null;
     }
 
+    // Cached under the owner so a global sheet is shared by all sites
     const { boostData } = boost.boostEntry;
-    return this.#stylesManager.getStyleForBoost(boostData, domain);
+    return this.#stylesManager.getStyleForBoost(boostData, boost.domain);
   }
 
   /**

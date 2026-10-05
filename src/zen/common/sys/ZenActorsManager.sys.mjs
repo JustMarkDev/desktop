@@ -86,6 +86,9 @@ if (!Services.appinfo.inSafeMode) {
       esModuleURI: "resource:///actors/ZenBoostsChild.sys.mjs",
       events: {
         DOMDocElementInserted: {},
+        // Page colours are only known once styles load
+        DOMContentLoaded: {},
+        pageshow: {},
       },
     },
     safeForUntrustedWebProcess: true,

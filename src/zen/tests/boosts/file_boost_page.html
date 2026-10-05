@@ -1,0 +1,32 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Boost page</title>
+    <style>
+      pre { font-family: monospace; }
+      /* What icon font stylesheets do */
+      .material-symbols-outlined, .glyph::before { font-family: "Icons"; }
+      .glyph { font-family: "Icons"; }
+      x-shadow-host::part(text), .shadow-text { font-family: serif; }
+    </style>
+  </head>
+  <body>
+    <p id="text">Boost test page</p>
+    <pre id="code">let x = 1;</pre>
+    <span id="icon" class="material-symbols-outlined">home</span>
+    <i id="empty" class="glyph"></i>
+    <x-shadow-host id="host"></x-shadow-host>
+    <script>
+      customElements.define(
+        "x-shadow-host",
+        class extends HTMLElement {
+          connectedCallback() {
+            this.attachShadow({ mode: "open" }).innerHTML =
+              '<style>span { font-family: serif; }</style><span id="inner">Shadow</span>';
+          }
+        }
+      );
+    </script>
+  </body>
+</html>
