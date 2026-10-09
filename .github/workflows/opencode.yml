@@ -1,0 +1,75 @@
+name: opencode
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: opencode-${{ github.event.pull_request.number }}-review
+  cancel-in-progress: true
+
+jobs:
+  opencode:
+    # PRs: skip drafts, fork PRs and Dependabot PRs (no secret access).
+    if: >-
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      checks: write
+      actions: read
+    steps:
+      - uses: actions/checkout@main
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install OpenCode v2
+        run: npm install --global @opencode/cli
+
+      - name: Review PR
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          opencode run --standalone --auto
+          --model 'opencode-go/muse-spark-1.3-contributor#xhigh'
+          --agent review
+          'Review this pull request. Follow .github/opencode-review.md exactly: verify and resolve earlier findings, find new problems, post them as one inline GitHub review. There is no harness: you must post the `## Review ·` summary yourself with `gh api repos/{owner}/{repo}/issues/{number}/comments -f body=...` using the exact shape from the Final message section, then stop.'
+
+      # Keep one clean summary: drop the action's run-link footer, collapse older summaries.
+      - name: Tidy summaries
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          summaries=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/issues/${{ github.event.pull_request.number }}/comments" |
+            jq '[.[][] | select(.user.type == "Bot" and (.body | startswith("## Review ·")))]')
+          jq -c '.[-1] // empty | {id, body: (.body | sub("\\n+\\[github run\\]\\([^)]*\\)\\s*$"; ""))}' <<< "$summaries" |
+            while read -r c; do
+              jq -r .body <<< "$c" | gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$(jq -r .id <<< "$c")" -F body=@-
+            done
+          jq -r '.[:-1][].node_id' <<< "$summaries" |
+            while read -r id; do
+              gh api graphql -f id="$id" -f query='mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { minimizedComment { isMinimized } } }'
+            done
+
+      # Non-required check mirroring the verdict; skipped if this run produced no summary.
+      - name: Verdict check
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sha=${{ github.event.pull_request.head.sha }}
+          last=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/issues/${{ github.event.pull_request.number }}/comments" |
+            jq -r '[.[][] | select(.user.type == "Bot" and (.body | startswith("## Review · ")))] | .[-1].body // empty')
+          [[ "$last" == "## Review · ${sha:0:7}"* ]] || exit 0
+          verdict=$(sed -n 3p <<< "$last")
+          case "$verdict" in *🚫*) c=failure ;; *⚠️*) c=neutral ;; *) c=success ;; esac
+          gh api -X POST "repos/$GITHUB_REPOSITORY/check-runs" -f name='opencode review' -f head_sha="$sha" \
+            -f status=completed -f conclusion="$c" -f 'output[title]=opencode review' -f "output[summary]=$verdict"
